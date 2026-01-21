@@ -6,12 +6,19 @@ import { ConceptOfTheDay } from '../learning/ConceptOfTheDay';
 import { PromptOfTheDay } from '../learning/PromptOfTheDay';
 import { getArticlesByCategory } from '../../lib/mock-data';
 
+interface EditionInfo {
+  id: string;
+  date: string;
+}
+
 interface NewspaperLayoutProps {
   edition: Edition;
   onPrintClick: () => void;
+  editions?: EditionInfo[];
+  onEditionChange?: (editionId: string) => void;
 }
 
-export function NewspaperLayout({ edition, onPrintClick }: NewspaperLayoutProps) {
+export function NewspaperLayout({ edition, onPrintClick, editions, onEditionChange }: NewspaperLayoutProps) {
   const topStory = edition.articles.find(a => a.is_top_story);
   const articlesByCategory = getArticlesByCategory(edition.articles);
 
@@ -22,7 +29,13 @@ export function NewspaperLayout({ edition, onPrintClick }: NewspaperLayoutProps)
   return (
     <div className="min-h-screen bg-newspaper-bg">
       <div className="max-w-6xl mx-auto px-4 py-8 bg-newspaper-paper shadow-xl" id="newspaper-content">
-        <Header date={edition.date} onPrintClick={onPrintClick} />
+        <Header
+          date={edition.date}
+          onPrintClick={onPrintClick}
+          editions={editions}
+          currentEditionId={edition.id}
+          onEditionChange={onEditionChange}
+        />
 
         {/* Top Story */}
         {topStory && <TopStory article={topStory} />}

@@ -1,0 +1,363 @@
+{
+  "name": "KI-Kurier Simple",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 6 * * *"
+            }
+          ]
+        }
+      },
+      "id": "trigger",
+      "name": "Jeden Tag 6 Uhr",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://www.heise.de/rss/heise-atom.xml",
+        "options": {}
+      },
+      "id": "rss1",
+      "name": "Heise RSS",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [450, 200]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://www.golem.de/rss.php?feed=RSS2.0",
+        "options": {}
+      },
+      "id": "rss2",
+      "name": "Golem RSS",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [450, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// RSS XML parsen und Artikel extrahieren\nconst allItems = [];\nconst feeds = $input.all();\n\nfor (const feed of feeds) {\n  try {\n    const xml = feed.json.data || '';\n    \n    // Items aus Atom oder RSS2 extrahieren\n    const atomItems = xml.match(/<entry[^>]*>[\\s\\S]*?<\\/entry>/gi) || [];\n    const rssItems = xml.match(/<item[^>]*>[\\s\\S]*?<\\/item>/gi) || [];\n    const items = atomItems.length > 0 ? atomItems : rssItems;\n    \n    for (const itemXml of items.slice(0, 15)) {\n      // Titel extrahieren\n      let title = '';\n      const titleMatch = itemXml.match(/<title[^>]*>([\\s\\S]*?)<\\/title>/i);\n      if (titleMatch) {\n        title = titleMatch[1].replace(/<!\\[CDATA\\[|\\]\\]>/g, '').replace(/<[^>]+>/g, '').trim();\n      }\n      \n      // Link extrahieren\n      let link = '';\n      const linkMatch = itemXml.match(/<link[^>]*href=\"([^\"]+)\"/i) || itemXml.match(/<link>([^<]+)<\\/link>/i);\n      if (linkMatch) link = linkMatch[1];\n      \n      // Beschreibung extrahieren\n      let description = '';\n      const descMatch = itemXml.match(/<(?:summary|description)[^>]*>([\\s\\S]*?)<\\/(?:summary|description)>/i);\n      if (descMatch) {\n        description = descMatch[1].replace(/<!\\[CDATA\\[|\\]\\]>/g, '').replace(/<[^>]+>/g, '').trim().slice(0, 800);\n      }\n      \n      // Datum extrahieren\n      let pubDate = new Date();\n      const dateMatch = itemXml.match(/<(?:published|pubDate|updated)[^>]*>([^<]+)<\\/(?:published|pubDate|updated)>/i);\n      if (dateMatch) {\n        pubDate = new Date(dateMatch[1]);\n      }\n      \n      // Nur letzte 48 Stunden\n      const twoDaysAgo = new Date(Date.now() - 48 * 60 * 60 * 1000);\n      if (title && link && pubDate > twoDaysAgo) {\n        allItems.push({\n          json: {\n            title,\n            link,\n            description,\n            pubDate: pubDate.toISOString()\n          }\n        });\n      }\n    }\n  } catch (e) {\n    console.log('Parse error:', e.message);\n  }\n}\n\n// Nur die neuesten 30 Artikel\nallItems.sort((a, b) => new Date(b.json.pubDate) - new Date(a.json.pubDate));\nreturn allItems.slice(0, 30);"
+      },
+      "id": "parse",
+      "name": "RSS Parsen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Alle Artikel zu einem Text zusammenfassen\nconst articles = $input.all();\nconst articleList = articles.map((a, i) => \n  `${i+1}. TITEL: ${a.json.title}\\nLINK: ${a.json.link}\\nBESCHREIBUNG: ${a.json.description}`\n).join('\\n\\n---\\n\\n');\n\nreturn [{\n  json: {\n    articleList,\n    count: articles.length\n  }\n}];"
+      },
+      "id": "prepare",
+      "name": "Vorbereiten fuer GPT",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o-mini",
+        "messages": {
+          "values": [
+            {
+              "content": "Du bist der Chefredakteur des KI-Kuriers, einer deutschen Zeitung ueber Kuenstliche Intelligenz. \n\nDeine Aufgabe:\n1. Filtere NUR Artikel die mit KI/AI, Machine Learning, LLMs, Robotik, Automatisierung zu tun haben\n2. Uebersetze/schreibe deutsche Ueberschriften\n3. Erstelle ausfuehrliche deutsche Zusammenfassungen (4-6 Saetze)\n4. Kategorisiere: politik, wissenschaft, biologie, medizin, krieg, china, roboter, allgemein\n5. Waehle die EINE wichtigste News als Top-Story\n\nZielgruppe: Menschen 50+, die KI verstehen wollen aber keine Techniker sind.\n\nAntworte NUR mit validem JSON Array, KEINE Erklaerungen davor oder danach!"
+            },
+            {
+              "role": "user",
+              "content": "Analysiere diese Artikel und waehle 6-10 KI-relevante aus:\n\n{{ $json.articleList }}\n\nAntworte mit JSON Array:\n[\n  {\n    \"headline\": \"Deutsche Ueberschrift\",\n    \"summary\": \"Kurz in 2 Saetzen\",\n    \"content\": \"Ausfuehrlich in 4-6 Saetzen mit Kontext und Bedeutung\",\n    \"key_points\": [\"Punkt 1\", \"Punkt 2\", \"Punkt 3\"],\n    \"category\": \"kategorie\",\n    \"source_url\": \"original link\",\n    \"source_name\": \"Heise oder Golem\",\n    \"is_top_story\": false\n  }\n]\n\nGenau EIN Artikel bekommt is_top_story: true"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.4
+        }
+      },
+      "id": "gpt-articles",
+      "name": "GPT Artikel erstellen",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [1050, 300],
+      "credentials": {
+        "openAiApi": {
+          "id": "OPENAI_CRED_ID",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o-mini",
+        "messages": {
+          "values": [
+            {
+              "content": "Du schreibst fuer den KI-Kurier. Erstelle das KI-Konzept des Tages.\n\nZielgruppe: Menschen 50+, keine Techniker.\n\nAntworte NUR mit JSON, keine Erklaerungen!"
+            },
+            {
+              "role": "user",
+              "content": "Erstelle das Konzept des Tages. Waehle ein spannendes KI-Thema wie: KI-Agent, Halluzinationen, Prompt Engineering, RAG, Token, Fine-Tuning, etc.\n\nJSON Format:\n{\n  \"title\": \"Was ist [Konzept]?\",\n  \"explanation\": \"Verstaendliche Erklaerung mit Alltags-Analogien (3-4 Saetze)\",\n  \"practical_examples\": [\"Beispiel 1\", \"Beispiel 2\", \"Beispiel 3\"]\n}"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.8
+        }
+      },
+      "id": "gpt-concept",
+      "name": "GPT Konzept erstellen",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [1050, 500],
+      "credentials": {
+        "openAiApi": {
+          "id": "OPENAI_CRED_ID",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o-mini",
+        "messages": {
+          "values": [
+            {
+              "content": "Du schreibst fuer den KI-Kurier. Erstelle den Prompt des Tages - ein nuetzlicher Prompt fuer ChatGPT.\n\nZielgruppe: Menschen 50+, Anfaenger mit KI.\n\nAntworte NUR mit JSON!"
+            },
+            {
+              "role": "user",
+              "content": "Erstelle einen praktischen Prompt des Tages. Ideen: Erklaer-Prompt, Brief schreiben, Rezepte, Reiseplanung, Technik-Hilfe.\n\nJSON Format:\n{\n  \"prompt_text\": \"Der komplette Prompt zum Kopieren\",\n  \"explanation\": \"Warum funktioniert das? (1-2 Saetze)\",\n  \"use_case\": \"Wann ist das nuetzlich? (1 Satz)\",\n  \"example_output\": \"Beispiel was die KI antwortet (kurz)\"\n}"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.8
+        }
+      },
+      "id": "gpt-prompt",
+      "name": "GPT Prompt erstellen",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [1050, 700],
+      "credentials": {
+        "openAiApi": {
+          "id": "OPENAI_CRED_ID",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// JSON Responses zusammenfuehren\nconst articlesRaw = $('GPT Artikel erstellen').first().json.message?.content || $('GPT Artikel erstellen').first().json.text || '{}';\nconst conceptRaw = $('GPT Konzept erstellen').first().json.message?.content || $('GPT Konzept erstellen').first().json.text || '{}';\nconst promptRaw = $('GPT Prompt erstellen').first().json.message?.content || $('GPT Prompt erstellen').first().json.text || '{}';\n\n// JSON parsen (mit Fehlerbehandlung)\nfunction parseJSON(str) {\n  try {\n    // Markdown code blocks entfernen falls vorhanden\n    const cleaned = str.replace(/```json\\n?|```\\n?/g, '').trim();\n    return JSON.parse(cleaned);\n  } catch (e) {\n    console.log('Parse error:', e.message, str.slice(0, 100));\n    return null;\n  }\n}\n\nconst articles = parseJSON(articlesRaw) || [];\nconst concept = parseJSON(conceptRaw);\nconst prompt = parseJSON(promptRaw);\n\nconst today = new Date().toISOString().split('T')[0];\nconst editionId = 'ed_' + Date.now();\n\nreturn [{\n  json: {\n    edition: {\n      id: editionId,\n      publication_date: today\n    },\n    articles: articles.map((a, i) => ({\n      id: 'art_' + Date.now() + '_' + i,\n      edition_id: editionId,\n      headline: a.headline,\n      summary: a.summary,\n      content: a.content,\n      key_points: a.key_points || [],\n      category: a.category,\n      source_url: a.source_url,\n      source_name: a.source_name,\n      is_top_story: a.is_top_story || false\n    })),\n    concept: concept ? {\n      id: 'con_' + Date.now(),\n      edition_id: editionId,\n      title: concept.title,\n      explanation: concept.explanation,\n      practical_examples: concept.practical_examples || []\n    } : null,\n    prompt: prompt ? {\n      id: 'prm_' + Date.now(),\n      edition_id: editionId,\n      prompt_text: prompt.prompt_text,\n      explanation: prompt.explanation,\n      use_case: prompt.use_case,\n      example_output: prompt.example_output\n    } : null\n  }\n}];"
+      },
+      "id": "merge",
+      "name": "Daten zusammenfuehren",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 500]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "YOUR_SUPABASE_URL/rest/v1/editions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "YOUR_SUPABASE_SECRET_KEY"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_SUPABASE_SECRET_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ id: $json.edition.id, publication_date: $json.edition.publication_date }) }}"
+      },
+      "id": "save-edition",
+      "name": "Edition speichern",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1500, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "YOUR_SUPABASE_URL/rest/v1/articles",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "YOUR_SUPABASE_SECRET_KEY"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_SUPABASE_SECRET_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Daten zusammenfuehren').first().json.articles) }}"
+      },
+      "id": "save-articles",
+      "name": "Artikel speichern",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1700, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "YOUR_SUPABASE_URL/rest/v1/concepts",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "YOUR_SUPABASE_SECRET_KEY"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_SUPABASE_SECRET_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Daten zusammenfuehren').first().json.concept) }}"
+      },
+      "id": "save-concept",
+      "name": "Konzept speichern",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1700, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "YOUR_SUPABASE_URL/rest/v1/daily_prompts",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "YOUR_SUPABASE_SECRET_KEY"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_SUPABASE_SECRET_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Daten zusammenfuehren').first().json.prompt) }}"
+      },
+      "id": "save-prompt",
+      "name": "Prompt speichern",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1700, 600]
+    }
+  ],
+  "connections": {
+    "Jeden Tag 6 Uhr": {
+      "main": [
+        [
+          { "node": "Heise RSS", "type": "main", "index": 0 },
+          { "node": "Golem RSS", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Heise RSS": {
+      "main": [
+        [{ "node": "RSS Parsen", "type": "main", "index": 0 }]
+      ]
+    },
+    "Golem RSS": {
+      "main": [
+        [{ "node": "RSS Parsen", "type": "main", "index": 0 }]
+      ]
+    },
+    "RSS Parsen": {
+      "main": [
+        [{ "node": "Vorbereiten fuer GPT", "type": "main", "index": 0 }]
+      ]
+    },
+    "Vorbereiten fuer GPT": {
+      "main": [
+        [
+          { "node": "GPT Artikel erstellen", "type": "main", "index": 0 },
+          { "node": "GPT Konzept erstellen", "type": "main", "index": 0 },
+          { "node": "GPT Prompt erstellen", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "GPT Artikel erstellen": {
+      "main": [
+        [{ "node": "Daten zusammenfuehren", "type": "main", "index": 0 }]
+      ]
+    },
+    "GPT Konzept erstellen": {
+      "main": [
+        [{ "node": "Daten zusammenfuehren", "type": "main", "index": 0 }]
+      ]
+    },
+    "GPT Prompt erstellen": {
+      "main": [
+        [{ "node": "Daten zusammenfuehren", "type": "main", "index": 0 }]
+      ]
+    },
+    "Daten zusammenfuehren": {
+      "main": [
+        [{ "node": "Edition speichern", "type": "main", "index": 0 }]
+      ]
+    },
+    "Edition speichern": {
+      "main": [
+        [
+          { "node": "Artikel speichern", "type": "main", "index": 0 },
+          { "node": "Konzept speichern", "type": "main", "index": 0 },
+          { "node": "Prompt speichern", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

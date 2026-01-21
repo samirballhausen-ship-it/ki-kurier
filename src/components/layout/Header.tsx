@@ -1,14 +1,39 @@
-import { Calendar, Printer } from 'lucide-react';
+import { Calendar, Printer, ChevronLeft, ChevronRight, Archive } from 'lucide-react';
 import { format } from 'date-fns';
 import { de } from 'date-fns/locale';
+
+interface EditionInfo {
+  id: string;
+  date: string;
+}
 
 interface HeaderProps {
   date: string;
   onPrintClick: () => void;
+  editions?: EditionInfo[];
+  currentEditionId?: string;
+  onEditionChange?: (editionId: string) => void;
 }
 
-export function Header({ date, onPrintClick }: HeaderProps) {
+export function Header({ date, onPrintClick, editions, currentEditionId, onEditionChange }: HeaderProps) {
   const formattedDate = format(new Date(date), "EEEE, d. MMMM yyyy", { locale: de });
+
+  // Finde aktuelle Position in der Editions-Liste
+  const currentIndex = editions?.findIndex(e => e.id === currentEditionId) ?? -1;
+  const hasPrevious = currentIndex < (editions?.length ?? 0) - 1;
+  const hasNext = currentIndex > 0;
+
+  const goToPrevious = () => {
+    if (hasPrevious && editions && onEditionChange) {
+      onEditionChange(editions[currentIndex + 1].id);
+    }
+  };
+
+  const goToNext = () => {
+    if (hasNext && editions && onEditionChange) {
+      onEditionChange(editions[currentIndex - 1].id);
+    }
+  };
 
   return (
     <header className="border-b-4 border-newspaper-ink pb-4 mb-6">
@@ -18,14 +43,41 @@ export function Header({ date, onPrintClick }: HeaderProps) {
           <Calendar className="w-4 h-4" />
           <span>{formattedDate}</span>
         </div>
-        <button
-          onClick={onPrintClick}
-          className="no-print flex items-center gap-2 px-3 py-1 bg-newspaper-ink text-newspaper-paper 
-                     hover:bg-newspaper-accent transition-colors text-sm font-sans"
-        >
-          <Printer className="w-4 h-4" />
-          <span>PDF herunterladen</span>
-        </button>
+        <div className="no-print flex items-center gap-2">
+          {/* Archiv-Navigation */}
+          {editions && editions.length > 1 && (
+            <div className="flex items-center gap-1 mr-4">
+              <button
+                onClick={goToPrevious}
+                disabled={!hasPrevious}
+                className={`p-1 rounded ${hasPrevious ? 'hover:bg-gray-200' : 'opacity-30 cursor-not-allowed'}`}
+                title="Ältere Ausgabe"
+              >
+                <ChevronLeft className="w-5 h-5" />
+              </button>
+              <span className="flex items-center gap-1 text-sm">
+                <Archive className="w-4 h-4" />
+                <span>{currentIndex + 1} / {editions.length}</span>
+              </span>
+              <button
+                onClick={goToNext}
+                disabled={!hasNext}
+                className={`p-1 rounded ${hasNext ? 'hover:bg-gray-200' : 'opacity-30 cursor-not-allowed'}`}
+                title="Neuere Ausgabe"
+              >
+                <ChevronRight className="w-5 h-5" />
+              </button>
+            </div>
+          )}
+          <button
+            onClick={onPrintClick}
+            className="flex items-center gap-2 px-3 py-1 bg-newspaper-ink text-newspaper-paper
+                       hover:bg-newspaper-accent transition-colors text-sm font-sans"
+          >
+            <Printer className="w-4 h-4" />
+            <span>PDF herunterladen</span>
+          </button>
+        </div>
       </div>
 
       {/* Masthead / Zeitungs-Titel */}

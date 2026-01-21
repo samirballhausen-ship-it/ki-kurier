@@ -4,10 +4,35 @@ import { mockEdition } from './lib/mock-data';
 import { supabase, isSupabaseConfigured } from './lib/supabase';
 import { Edition, Article, ConceptOfTheDay, PromptOfTheDay } from './types';
 
+interface EditionInfo {
+  id: string;
+  date: string;
+}
+
 function App() {
   const [edition, setEdition] = useState<Edition>(mockEdition);
+  const [editions, setEditions] = useState<EditionInfo[]>([]);
+  const [selectedEditionId, setSelectedEditionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Alle Editions laden (für Archiv-Navigation)
+  useEffect(() => {
+    async function fetchAllEditions() {
+      if (!isSupabaseConfigured() || !supabase) return;
+
+      const { data } = await supabase
+        .from('editions')
+        .select('id, publication_date')
+        .order('publication_date', { ascending: false });
+
+      if (data) {
+        setEditions(data.map(e => ({ id: e.id, date: e.publication_date })));
+      }
+    }
+
+    fetchAllEditions();
+  }, []);
 
   // Daten aus Supabase laden
   useEffect(() => {
@@ -19,21 +44,38 @@ function App() {
       }
 
       console.log('Lade Daten aus Supabase...');
+      setLoading(true);
 
       try {
-        // Neueste Edition holen
-        const { data: editions, error: editionError } = await supabase
-          .from('editions')
-          .select('*')
-          .order('publication_date', { ascending: false })
-          .limit(1);
+        let editionData;
 
-        console.log('Edition Antwort:', { editions, editionError });
+        // Wenn eine bestimmte Edition ausgewählt ist, lade diese
+        if (selectedEditionId) {
+          const { data, error: editionError } = await supabase
+            .from('editions')
+            .select('*')
+            .eq('id', selectedEditionId)
+            .single();
 
-        if (editionError) throw editionError;
-        if (!editions || editions.length === 0) throw new Error('Keine Edition gefunden');
+          if (editionError) throw editionError;
+          editionData = data;
+        } else {
+          // Sonst neueste Edition holen
+          const { data: editionsData, error: editionError } = await supabase
+            .from('editions')
+            .select('*')
+            .order('publication_date', { ascending: false })
+            .limit(1);
 
-        const editionData = editions[0];
+          console.log('Edition Antwort:', { editions: editionsData, editionError });
+
+          if (editionError) throw editionError;
+          if (!editionsData || editionsData.length === 0) throw new Error('Keine Edition gefunden');
+
+          editionData = editionsData[0];
+        }
+
+        if (!editionData) throw new Error('Keine Edition gefunden');
 
         // Artikel für diese Edition holen
         const { data: articles, error: articlesError } = await supabase
@@ -118,7 +160,7 @@ function App() {
     }
 
     fetchEdition();
-  }, []);
+  }, [selectedEditionId]);
 
   const handlePrint = useCallback(async () => {
     // @ts-ignore - html2pdf.js hat keine TypeScript Definitionen
@@ -179,7 +221,12 @@ function App() {
           </p>
         </div>
       )}
-      <NewspaperLayout edition={edition} onPrintClick={handlePrint} />
+      <NewspaperLayout
+          edition={edition}
+          onPrintClick={handlePrint}
+          editions={editions}
+          onEditionChange={setSelectedEditionId}
+        />
     </>
   );
 }
