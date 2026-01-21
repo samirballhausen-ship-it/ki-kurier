@@ -1,0 +1,593 @@
+{
+  "name": "KI-Kurier Daily Generation",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 6 * * *"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Daily 6 AM Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 300],
+      "notes": "Startet täglich um 06:00 Uhr"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.url }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "fetch-rss",
+      "name": "Fetch RSS Feeds",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 300],
+      "notes": "Ruft RSS-Feeds ab"
+    },
+    {
+      "parameters": {
+        "jsCode": "// RSS-Quellen aus Supabase\nconst sources = $input.all();\n\n// Für jeden Feed eine URL generieren\nreturn sources.map(source => ({\n  json: {\n    source_id: source.json.id,\n    name: source.json.name,\n    url: source.json.url,\n    category: source.json.category,\n    language: source.json.language\n  }\n}));"
+      },
+      "id": "prepare-urls",
+      "name": "Prepare Feed URLs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "operation": "select",
+        "tableId": "rss_sources",
+        "filterType": "formula",
+        "formula": "active = true"
+      },
+      "id": "get-sources",
+      "name": "Get RSS Sources",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "credentials": {
+        "supabaseApi": {
+          "id": "SUPABASE_CREDENTIAL_ID",
+          "name": "Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// XML zu JSON parsen und Artikel extrahieren\nconst items = [];\nconst input = $input.all();\n\nfor (const feed of input) {\n  try {\n    // Einfaches RSS-Parsing (in Produktion: xml2js nutzen)\n    const xml = feed.json.data;\n    const itemMatches = xml.match(/<item[^>]*>([\\s\\S]*?)<\\/item>/gi) || [];\n    \n    for (const itemXml of itemMatches.slice(0, 10)) { // Max 10 pro Feed\n      const title = (itemXml.match(/<title>([^<]+)<\\/title>/i) || [])[1] || '';\n      const link = (itemXml.match(/<link>([^<]+)<\\/link>/i) || [])[1] || '';\n      const description = (itemXml.match(/<description>([\\s\\S]*?)<\\/description>/i) || [])[1] || '';\n      const pubDate = (itemXml.match(/<pubDate>([^<]+)<\\/pubDate>/i) || [])[1] || '';\n      \n      // Nur Artikel der letzten 24 Stunden\n      const articleDate = new Date(pubDate);\n      const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);\n      \n      if (articleDate > oneDayAgo && title && link) {\n        items.push({\n          json: {\n            title: title.replace(/<![CDATA[|]]>/g, '').trim(),\n            link,\n            description: description.replace(/<![CDATA[|]]>/g, '').replace(/<[^>]+>/g, '').trim().slice(0, 500),\n            source_name: feed.json.name || 'Unknown',\n            category: feed.json.category,\n            language: feed.json.language,\n            pubDate: articleDate.toISOString()\n          }\n        });\n      }\n    }\n  } catch (e) {\n    console.error('Feed parsing error:', e);\n  }\n}\n\nreturn items;"
+      },
+      "id": "parse-rss",
+      "name": "Parse RSS to JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [860, 300]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Du bist ein KI-News-Kurator. Deine Aufgabe ist es, Nachrichten zu filtern und nur solche zu behalten, die mit Künstlicher Intelligenz zu tun haben. Antworte nur mit 'JA' oder 'NEIN'."
+            },
+            {
+              "role": "user",
+              "content": "Handelt diese Nachricht von Künstlicher Intelligenz, Machine Learning, Large Language Models, Robotik, oder verwandten Themen?\n\nTitel: {{ $json.title }}\nBeschreibung: {{ $json.description }}\n\nAntworte nur mit JA oder NEIN."
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0
+        }
+      },
+      "id": "filter-ai-news",
+      "name": "Filter AI News",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1,
+      "position": [1060, 300],
+      "credentials": {
+        "openAiApi": {
+          "id": "OPENAI_CREDENTIAL_ID",
+          "name": "OpenAI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.response }}",
+              "operation": "contains",
+              "value2": "JA"
+            }
+          ]
+        }
+      },
+      "id": "keep-ai-only",
+      "name": "Keep AI News Only",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1260, 300]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Du bist ein Redakteur für eine deutschsprachige KI-Zeitung. Erstelle eine prägnante Zusammenfassung des Artikels auf Deutsch. Die Zusammenfassung sollte 2-3 Sätze lang sein und die Kernaussage des Artikels vermitteln."
+            },
+            {
+              "role": "user",
+              "content": "Erstelle eine deutsche Zusammenfassung (2-3 Sätze) für diesen Artikel:\n\nTitel: {{ $json.title }}\nBeschreibung: {{ $json.description }}\nQuelle: {{ $json.source_name }}\n\nAntworte nur mit der Zusammenfassung, ohne Einleitung."
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.7
+        }
+      },
+      "id": "summarize",
+      "name": "Summarize in German",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1,
+      "position": [1460, 200],
+      "credentials": {
+        "openAiApi": {
+          "id": "OPENAI_CREDENTIAL_ID",
+          "name": "OpenAI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Ordne den Artikel einer dieser Kategorien zu: politik, wissenschaft, biologie, medizin, krieg, china, roboter, allgemein. Antworte nur mit der Kategorie (ein Wort, kleingeschrieben)."
+            },
+            {
+              "role": "user",
+              "content": "Titel: {{ $json.title }}\nZusammenfassung: {{ $json.summary }}\n\nKategorie:"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0
+        }
+      },
+      "id": "categorize",
+      "name": "Categorize Article",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1,
+      "position": [1660, 200],
+      "credentials": {
+        "openAiApi": {
+          "id": "OPENAI_CREDENTIAL_ID",
+          "name": "OpenAI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Artikel gruppieren und Top-Story auswählen\nconst articles = $input.all();\nconst categories = {};\n\n// Nach Kategorie gruppieren\narticles.forEach((article, idx) => {\n  const cat = article.json.category || 'allgemein';\n  if (!categories[cat]) categories[cat] = [];\n  categories[cat].push({\n    ...article.json,\n    id: `article-${idx}`\n  });\n});\n\n// Max 3 Artikel pro Kategorie\nconst limitedArticles = [];\nObject.keys(categories).forEach(cat => {\n  categories[cat].slice(0, 3).forEach(a => limitedArticles.push(a));\n});\n\nreturn [{\n  json: {\n    articles: limitedArticles,\n    articleTexts: limitedArticles.map(a => `${a.title}: ${a.summary}`).join('\\n\\n')\n  }\n}];"
+      },
+      "id": "group-articles",
+      "name": "Group by Category",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1860, 200]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Du bist Chefredakteur einer KI-Zeitung. Wähle den wichtigsten Artikel des Tages als Top-Story aus. Antworte nur mit dem exakten Titel des Artikels."
+            },
+            {
+              "role": "user",
+              "content": "Hier sind die heutigen KI-News. Welcher Artikel sollte die Top-Story werden?\n\n{{ $json.articleTexts }}\n\nAntworte nur mit dem Titel der Top-Story."
+            }
+          ]
+        }
+      },
+      "id": "select-top-story",
+      "name": "Select Top Story",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1,
+      "position": [2060, 200],
+      "credentials": {
+        "openAiApi": {
+          "id": "OPENAI_CREDENTIAL_ID",
+          "name": "OpenAI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "dall-e-3",
+        "prompt": "={{ 'A professional news illustration for an AI technology newspaper. Topic: ' + $json.topStoryTitle + '. Style: Modern, clean, tech-focused, blue and white color scheme, no text in image.' }}",
+        "options": {
+          "size": "1792x1024",
+          "quality": "standard"
+        }
+      },
+      "id": "generate-image",
+      "name": "Generate Top Story Image",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1,
+      "position": [2260, 200],
+      "credentials": {
+        "openAiApi": {
+          "id": "OPENAI_CREDENTIAL_ID",
+          "name": "OpenAI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Du schreibst für eine KI-Zeitung, die KI-Konzepte für Nicht-Techniker (50+ Jahre) erklärt. Erstelle ein 'KI-Konzept des Tages' im JSON-Format."
+            },
+            {
+              "role": "user",
+              "content": "Erstelle ein KI-Konzept des Tages. Wähle ein Konzept, das relevant für die heutigen News ist oder generell nützlich zu verstehen ist.\n\nFormat (JSON):\n{\n  \"title\": \"Was ist [Konzept]?\",\n  \"explanation\": \"Einfache Erklärung in 3-4 Sätzen, die auch Nicht-Techniker verstehen\",\n  \"practical_examples\": [\"Beispiel 1\", \"Beispiel 2\", \"Beispiel 3\"]\n}\n\nAntworte nur mit dem JSON, keine Erklärung."
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.8
+        }
+      },
+      "id": "generate-concept",
+      "name": "Generate Concept of the Day",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1,
+      "position": [2060, 400],
+      "credentials": {
+        "openAiApi": {
+          "id": "OPENAI_CREDENTIAL_ID",
+          "name": "OpenAI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Du bist Prompt-Experte für eine KI-Zeitung. Erstelle einen 'Prompt des Tages' für ChatGPT/Claude, der für Anfänger nützlich ist."
+            },
+            {
+              "role": "user",
+              "content": "Erstelle einen Prompt des Tages. Der Prompt sollte praktisch und für Alltags-Nutzer hilfreich sein.\n\nFormat (JSON):\n{\n  \"prompt_text\": \"Der vollständige Prompt zum Kopieren\",\n  \"explanation\": \"Warum dieser Prompt funktioniert (2-3 Sätze)\",\n  \"use_case\": \"Wann man diesen Prompt benutzt (1-2 Sätze)\",\n  \"example_output\": \"Ein Beispiel, was die KI antworten würde (kurz)\"\n}\n\nAntworte nur mit dem JSON."
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.8
+        }
+      },
+      "id": "generate-prompt",
+      "name": "Generate Prompt of the Day",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1,
+      "position": [2060, 500],
+      "credentials": {
+        "openAiApi": {
+          "id": "OPENAI_CREDENTIAL_ID",
+          "name": "OpenAI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "tableId": "editions",
+        "data": {
+          "date": "={{ $now.format('yyyy-MM-dd') }}"
+        }
+      },
+      "id": "create-edition",
+      "name": "Create Edition",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2460, 300],
+      "credentials": {
+        "supabaseApi": {
+          "id": "SUPABASE_CREDENTIAL_ID",
+          "name": "Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "tableId": "articles",
+        "data": "={{ $json.articles }}"
+      },
+      "id": "save-articles",
+      "name": "Save Articles",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2660, 200],
+      "credentials": {
+        "supabaseApi": {
+          "id": "SUPABASE_CREDENTIAL_ID",
+          "name": "Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "tableId": "concepts",
+        "data": "={{ $json.concept }}"
+      },
+      "id": "save-concept",
+      "name": "Save Concept",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2660, 300],
+      "credentials": {
+        "supabaseApi": {
+          "id": "SUPABASE_CREDENTIAL_ID",
+          "name": "Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "tableId": "daily_prompts",
+        "data": "={{ $json.prompt }}"
+      },
+      "id": "save-prompt",
+      "name": "Save Prompt",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2660, 400],
+      "credentials": {
+        "supabaseApi": {
+          "id": "SUPABASE_CREDENTIAL_ID",
+          "name": "Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "ki-kurier@example.com",
+        "toEmail": "={{ $env.RECIPIENT_EMAIL }}",
+        "subject": "KI-Kurier - Neue Ausgabe vom {{ $now.format('dd.MM.yyyy') }}",
+        "emailFormat": "html",
+        "html": "<!DOCTYPE html>\n<html>\n<head>\n  <style>\n    body { font-family: Georgia, serif; max-width: 600px; margin: 0 auto; padding: 20px; }\n    h1 { font-size: 32px; border-bottom: 3px solid #1a1a1a; padding-bottom: 10px; }\n    .top-story { background: #f5f5f5; padding: 15px; margin: 20px 0; }\n    .btn { display: inline-block; padding: 12px 24px; background: #1a1a1a; color: white; text-decoration: none; margin-top: 20px; }\n  </style>\n</head>\n<body>\n  <h1>KI-Kurier</h1>\n  <p>Guten Morgen! Deine tägliche KI-Zeitung ist da.</p>\n  \n  <div class=\"top-story\">\n    <strong>Top-Thema heute:</strong><br>\n    {{ $json.topStoryTitle }}\n  </div>\n  \n  <p>In der heutigen Ausgabe findest du {{ $json.articleCount }} Artikel aus 8 Kategorien, plus:</p>\n  <ul>\n    <li>KI-Konzept des Tages</li>\n    <li>Prompt des Tages zum Ausprobieren</li>\n  </ul>\n  \n  <a href=\"{{ $env.APP_URL }}\" class=\"btn\">Zeitung lesen →</a>\n  \n  <p style=\"margin-top: 30px; font-size: 12px; color: #666;\">\n    Diese Zeitung wurde automatisch für dich generiert.<br>\n    Mit Liebe von Samir ❤️\n  </p>\n</body>\n</html>"
+      },
+      "id": "send-email",
+      "name": "Send Notification Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [2860, 300],
+      "credentials": {
+        "smtp": {
+          "id": "SMTP_CREDENTIAL_ID",
+          "name": "SMTP"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Daily 6 AM Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get RSS Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get RSS Sources": {
+      "main": [
+        [
+          {
+            "node": "Prepare Feed URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Feed URLs": {
+      "main": [
+        [
+          {
+            "node": "Fetch RSS Feeds",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch RSS Feeds": {
+      "main": [
+        [
+          {
+            "node": "Parse RSS to JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse RSS to JSON": {
+      "main": [
+        [
+          {
+            "node": "Filter AI News",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter AI News": {
+      "main": [
+        [
+          {
+            "node": "Keep AI News Only",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Keep AI News Only": {
+      "main": [
+        [
+          {
+            "node": "Summarize in German",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summarize in German": {
+      "main": [
+        [
+          {
+            "node": "Categorize Article",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Categorize Article": {
+      "main": [
+        [
+          {
+            "node": "Group by Category",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Group by Category": {
+      "main": [
+        [
+          {
+            "node": "Select Top Story",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Generate Concept of the Day",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Generate Prompt of the Day",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Top Story": {
+      "main": [
+        [
+          {
+            "node": "Generate Top Story Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Top Story Image": {
+      "main": [
+        [
+          {
+            "node": "Create Edition",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Edition": {
+      "main": [
+        [
+          {
+            "node": "Save Articles",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Save Concept",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Save Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Articles": {
+      "main": [
+        [
+          {
+            "node": "Send Notification Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": {
+    "instanceId": "ki-kurier"
+  },
+  "tags": [
+    {
+      "name": "KI-Kurier",
+      "createdAt": "2024-01-01T00:00:00.000Z",
+      "updatedAt": "2024-01-01T00:00:00.000Z"
+    }
+  ]
+}
