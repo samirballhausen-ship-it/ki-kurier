@@ -1,4 +1,4 @@
-import { Edition, Category, CATEGORIES } from '../../types';
+import { Edition, Category } from '../../types';
 import { Header } from '../layout/Header';
 import { TopStory } from './TopStory';
 import { CategorySection } from './CategorySection';

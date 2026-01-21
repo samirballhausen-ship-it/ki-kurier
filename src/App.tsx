@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect } from 'react';
 import { NewspaperLayout } from './components/newspaper/NewspaperLayout';
 import { mockEdition } from './lib/mock-data';
 import { supabase, isSupabaseConfigured } from './lib/supabase';
-import { Edition, Article, Concept, DailyPrompt } from './types';
+import { Edition, Article, ConceptOfTheDay, PromptOfTheDay } from './types';
 
 function App() {
   const [edition, setEdition] = useState<Edition>(mockEdition);
@@ -44,22 +44,23 @@ function App() {
         if (articlesError) throw articlesError;
 
         // Konzept des Tages holen
-        const { data: concept, error: conceptError } = await supabase
+        const { data: concept } = await supabase
           .from('concepts')
           .select('*')
           .eq('edition_id', editionData.id)
           .single();
 
         // Prompt des Tages holen
-        const { data: prompt, error: promptError } = await supabase
+        const { data: prompt } = await supabase
           .from('daily_prompts')
           .select('*')
           .eq('edition_id', editionData.id)
           .single();
 
         // Daten in Edition-Format umwandeln
-        const formattedArticles: Article[] = articles.map((a: any) => ({
+        const formattedArticles: Article[] = (articles || []).map((a: any) => ({
           id: a.id,
+          edition_id: a.edition_id,
           headline: a.headline,
           summary: a.summary,
           content: a.content,
@@ -69,29 +70,40 @@ function App() {
           source_name: a.source_name,
           image_url: a.image_url,
           is_top_story: a.is_top_story,
+          created_at: a.created_at,
         }));
 
-        const formattedConcept: Concept | undefined = concept ? {
+        const formattedConcept: ConceptOfTheDay | undefined = concept ? {
+          id: concept.id,
+          edition_id: concept.edition_id,
           title: concept.title,
           explanation: concept.explanation,
           practical_examples: concept.practical_examples,
+          created_at: concept.created_at,
         } : undefined;
 
-        const formattedPrompt: DailyPrompt | undefined = prompt ? {
+        const formattedPrompt: PromptOfTheDay | undefined = prompt ? {
+          id: prompt.id,
+          edition_id: prompt.edition_id,
           prompt_text: prompt.prompt_text,
           explanation: prompt.explanation,
           use_case: prompt.use_case,
           example_output: prompt.example_output,
+          created_at: prompt.created_at,
         } : undefined;
+
+        // Top Story finden
+        const topStory = formattedArticles.find(a => a.is_top_story);
 
         // Edition zusammenbauen
         const fullEdition: Edition = {
           id: editionData.id,
-          edition_number: editionData.edition_number,
           date: new Date(editionData.publication_date).toISOString().split('T')[0],
+          top_story_id: topStory?.id || formattedArticles[0]?.id || '',
+          created_at: editionData.created_at,
           articles: formattedArticles,
           concept: formattedConcept,
-          daily_prompt: formattedPrompt,
+          prompt: formattedPrompt,
         };
 
         setEdition(fullEdition);
@@ -109,6 +121,7 @@ function App() {
   }, []);
 
   const handlePrint = useCallback(async () => {
+    // @ts-ignore - html2pdf.js hat keine TypeScript Definitionen
     const html2pdf = (await import('html2pdf.js')).default;
 
     const element = document.getElementById('newspaper-content');
